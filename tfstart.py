@@ -1,0 +1,47 @@
+import tensorflow as tf
+import numpy as np
+
+sess = tf.Session()
+x = tf.placeholder(tf.float32, shape=[2,2])
+y = tf.identity(x)
+x_vals = np.random.rand(2,2)
+sess.run(y, feed_dict={x: x_vals})
+
+identity_matrix = tf.diag([1.0, 1.0, 1.0])
+A = tf.truncated_normal([2, 3])
+B = tf.fill([2,3], 5.0)
+C = tf.random_uniform([3,2])
+D = tf.convert_to_tensor(np.array([[1., 2., 3.],[-3., -7.,
+-1.],[0., 5., -2.]]))
+print(sess.run(identity_matrix))
+print(sess.run(A))
+print(sess.run(B))
+print(sess.run(C))
+print(sess.run(D))
+print(sess.run(A+B))
+print(sess.run(B-B))
+print(sess.run(tf.multiply(B, 2)))
+print(sess.run(tf.matmul(B, identity_matrix)))
+print(sess.run(tf.transpose(C)))
+print(sess.run(tf.matrix_determinant(D)))
+print(sess.run(tf.matrix_inverse(D)))
+print(sess.run(tf.cholesky(identity_matrix)))
+print(sess.run(tf.self_adjoint_eig(D)))
+print(sess.run(tf.div(3,4)))
+print(sess.run(tf.truediv(3,4)))
+print(sess.run(tf.floordiv(3.0,4.0)))
+print(sess.run(tf.mod(22.0, 5.0)))
+print(sess.run(tf.cross([1., 0., 0.], [0., 1., 0.])))
+print(sess.run(tf.div(tf.sin(3.1416/4.), tf.cos(3.1416/4.))))
+
+def custom_polynomial(value):
+    return(tf.subtract(3 * tf.square(value), value) + 10)
+
+print(sess.run(custom_polynomial(11)))
+print(sess.run(tf.nn.relu([-3., 3., 10.])))
+print(sess.run(tf.nn.relu6([-3., 3., 10.])))
+print(sess.run(tf.nn.sigmoid([-1., 0., 1.])))
+print(sess.run(tf.nn.tanh([-1., 0., 1.])))
+print(sess.run(tf.nn.softsign([-1., 0., 1.])))
+print(sess.run(tf.nn.softplus([-1., 0., 1.])))
+print(sess.run(tf.nn.elu([-1., 0., 1.])))
