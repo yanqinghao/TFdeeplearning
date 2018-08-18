@@ -10,13 +10,153 @@ import collections
 import io
 import tarfile
 import urllib.request
-import text_helpers
 from nltk.corpus import stopwords
+
+def load_movie_data():
+    save_folder_name = 'temp'
+    pos_file = os.path.join(save_folder_name, 'rt-polarity.pos')
+    neg_file = os.path.join(save_folder_name, 'rt-polarity.neg')
+    # Check if files are already downloaded
+    if os.path.isfile(pos_file) and os.path.isfile(neg_file):
+        pos_data = []
+        with open(pos_file, 'r') as temp_pos_file:
+            for row in temp_pos_file:
+                pos_data.append(row)
+        neg_data = []
+        with open(neg_file, 'r') as temp_neg_file:
+            for row in temp_neg_file:
+                neg_data.append(row)
+    else: # If not downloaded, download and save
+        movie_data_url = 'http://www.cs.cornell.edu/people/pabo/movie-review-data/rt-polaritydata.tar.gz'
+        stream_data = urllib.request.urlopen(movie_data_url)
+        tmp = io.BytesIO()
+        while True:
+            s = stream_data.read()
+            if not s:
+                break
+            tmp.write(s)
+            stream_data.close()
+            tmp.seek(0)
+        tar_file = tarfile.open(fileobj=tmp, mode="r:gz")
+        pos = tar_file.extractfile('rt-polaritydata/rt-polarity.pos')
+        neg = tar_file.extractfile('rt-polaritydata/rt-polarity.neg')
+        # Save pos/neg reviews
+        pos_data = []
+        for line in pos:
+            pos_data.append(line.decode('ISO-8859-1').encode('ascii',errors='ignore').decode())
+        neg_data = []
+        for line in neg:
+            neg_data.append(line.decode('ISO-8859-1').encode('ascii', errors='ignore').decode())
+        tar_file.close()
+        # Write to file
+        if not os.path.exists(save_folder_name):
+            os.makedirs(save_folder_name)
+        # Save files
+        with open(pos_file, "w") as pos_file_handler:
+            pos_file_handler.write(''.join(pos_data))
+        with open(neg_file, "w") as neg_file_handler:
+            neg_file_handler.write(''.join(neg_data))
+    texts = pos_data + neg_data
+    target = [1] * len(pos_data) + [0] * len(neg_data)
+    return (texts, target)
+
+def normalize_text(texts, stops):
+    # Lower case
+    texts = [x.lower() for x in texts]
+    # Remove punctuation
+    texts = [''.join(c for c in x if c not in string.punctuation) for x in texts]
+    # Remove numbers
+    texts = [''.join(c for c in x if c not in '0123456789') for x in texts]
+    # Remove stopwords
+    texts = [' '.join([word for word in x.split() if word not in (stops)]) for x in texts]
+    # Trim extra whitespace
+    texts = [' '.join(x.split()) for x in texts]
+    return(texts)
+
+def build_dictionary(sentences, vocabulary_size):
+    # Turn sentences (list of strings) into lists of words
+    split_sentences = [s.split() for s in sentences]
+    words = [x for sublist in split_sentences for x in sublist]
+    # Initialize list of [word, word_count] for each word,starting with unknown
+    count = [['RARE', -1]]
+    # Now add most frequent words, limited to the N-most frequent(N=vocabulary size)
+    count.extend(collections.Counter(words).most_common(vocabulary_size-1))
+    # Now create the dictionary
+    word_dict = {}
+    # For each word, that we want in the dictionary, add it, then make it the value of the prior dictionary length
+    for word, word_count in count:
+        word_dict[word] = len(word_dict)
+    return(word_dict)
+
+def text_to_numbers(sentences, word_dict):
+    # Initialize the returned data
+    data = []
+    for sentence in sentences:
+        sentence_data = []
+        # For each word, either use selected index or rare word index
+        for word in sentence:
+            if word in word_dict:
+                word_ix = word_dict[word]
+            else:
+                word_ix = 0
+            sentence_data.append(word_ix)
+        data.append(sentence_data)
+    return(data)
+
+
+def generate_batch_data(sentences, batch_size, window_size, method='skip_gram'):
+    # Fill up data batch
+    batch_data = []
+    label_data = []
+    while len(batch_data) < batch_size:
+        # select random sentence to start
+        rand_sentence_ix = int(np.random.choice(len(sentences), size=1))
+        rand_sentence = sentences[rand_sentence_ix]
+        # Generate consecutive windows to look at
+        window_sequences = [rand_sentence[max((ix - window_size), 0):(ix + window_size + 1)] for ix, x in
+                            enumerate(rand_sentence)]
+        # Denote which element of each window is the center word of interest
+        label_indices = [ix if ix < window_size else window_size for ix, x in enumerate(window_sequences)]
+
+        # Pull out center word of interest for each window and create a tuple for each window
+        if method == 'skip_gram':
+            batch_and_labels = [(x[y], x[:y] + x[(y + 1):]) for x, y in zip(window_sequences, label_indices)]
+            # Make it in to a big list of tuples (target word, surrounding word)
+            tuple_data = [(x, y_) for x, y in batch_and_labels for y_ in y]
+            batch, labels = [list(x) for x in zip(*tuple_data)]
+        elif method == 'cbow':
+            batch_and_labels = [(x[:y] + x[(y + 1):], x[y]) for x, y in zip(window_sequences, label_indices)]
+            # Only keep windows with consistent 2*window_size
+            batch_and_labels = [(x, y) for x, y in batch_and_labels if len(x) == 2 * window_size]
+            batch, labels = [list(x) for x in zip(*batch_and_labels)]
+        elif method == 'doc2vec':
+            # For doc2vec we keep LHS window only to predict target word
+            batch_and_labels = [(rand_sentence[i:i + window_size], rand_sentence[i + window_size]) for i in
+                                range(0, len(rand_sentence) - window_size)]
+            batch, labels = [list(x) for x in zip(*batch_and_labels)]
+            # Add document index to batch!! Remember that we must extract the last index in batch for the doc-index
+            batch = [x + [rand_sentence_ix] for x in batch]
+        else:
+            raise ValueError('Method {} not implemented yet.'.format(method))
+
+        # extract batch and labels
+        batch_data.extend(batch[:batch_size])
+        label_data.extend(labels[:batch_size])
+    # Trim batch and label at the end
+    batch_data = batch_data[:batch_size]
+    label_data = label_data[:batch_size]
+
+    # Convert to numpy array
+    batch_data = np.array(batch_data)
+    label_data = np.transpose(np.array([label_data]))
+
+    return (batch_data, label_data)
+
 sess = tf.Session()
 data_folder_name = 'temp'
 if not os.path.exists(data_folder_name):
     os.makedirs(data_folder_name)
-texts, target = text_helpers.load_movie_data(data_folder_name)
+texts, target = load_movie_data()
 batch_size = 500
 vocabulary_size = 7500
 generations = 100000
@@ -34,14 +174,14 @@ print_loss_every = 100
 stops = stopwords.words('english')
 # We pick a few test words.
 valid_words = ['love', 'hate', 'happy', 'sad', 'man', 'woman']
-texts = text_helpers.normalize_text(texts, stops)
+texts = normalize_text(texts, stops)
 # Texts must contain at least as much as the prior window size
 target = [target[ix] for ix, x in enumerate(texts) if len(x.split()) > window_size]
 texts = [x for x in texts if len(x.split()) > window_size]
 assert(len(target)==len(texts))
-word_dictionary = text_helpers.build_dictionary(texts, vocabulary_size)
+word_dictionary = build_dictionary(texts, vocabulary_size)
 word_dictionary_rev = dict(zip(word_dictionary.values(), word_dictionary.keys()))
-text_data = text_helpers.text_to_numbers(texts, word_dictionary)
+text_data = text_to_numbers(texts, word_dictionary)
 # Get validation word keys
 valid_examples = [word_dictionary[x] for x in valid_words]
 embeddings = tf.Variable(tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))
@@ -58,8 +198,8 @@ for element in range(window_size):
 doc_indices = tf.slice(x_inputs, [0,window_size],[batch_size,1])
 doc_embed = tf.nn.embedding_lookup(doc_embeddings,doc_indices)
 # concatenate embeddings
-final_embed = tf.concat(1, [embed, tf.squeeze(doc_embed)])
-loss = tf.reduce_mean(tf.nn.nce_loss(nce_weights, nce_biases, final_embed, y_target, num_sampled, vocabulary_size))
+final_embed = tf.concat(axis=1, values=[embed, tf.squeeze(doc_embed)])
+loss = tf.reduce_mean(tf.nn.nce_loss(nce_weights, nce_biases, y_target, final_embed, num_sampled, vocabulary_size))
 # Create optimizer
 optimizer = tf.train.GradientDescentOptimizer(learning_rate=model_learning_rate)
 train_step = optimizer.minimize(loss)
@@ -73,7 +213,7 @@ sess.run(init)
 loss_vec = []
 loss_x_vec = []
 for i in range(generations):
-    batch_inputs, batch_labels = text_helpers.generate_batch_data(text_data, batch_size, window_size, method='doc2vec')
+    batch_inputs, batch_labels = generate_batch_data(text_data, batch_size, window_size, method='doc2vec')
     feed_dict = {x_inputs : batch_inputs, y_target : batch_labels}
     # Run the train step
     sess.run(train_step, feed_dict=feed_dict)
@@ -112,28 +252,33 @@ texts_train = [x for ix, x in enumerate(texts) if ix in train_indices]
 texts_test = [x for ix, x in enumerate(texts) if ix in test_indices]
 target_train = np.array([x for ix, x in enumerate(target) if ix in train_indices])
 target_test = np.array([x for ix, x in enumerate(target) if ix in test_indices])
-text_data_train = np.array(text_helpers.text_to_numbers(texts_train, word_dictionary))
-text_data_test = np.array(text_helpers.text_to_numbers(texts_test, word_dictionary))
+text_data_train = np.array(text_to_numbers(texts_train, word_dictionary))
+text_data_test = np.array(text_to_numbers(texts_test, word_dictionary))
 # Pad/crop movie reviews to specific length
 text_data_train = np.array([x[0:max_words] for x in [y+[0]*max_words for y in text_data_train]])
 text_data_test = np.array([x[0:max_words] for x in [y+[0]*max_words for y in text_data_test]])
 # Define Logistic placeholders
 log_x_inputs = tf.placeholder(tf.int32, shape=[None, max_words + 1])
 log_y_target = tf.placeholder(tf.int32, shape=[None, 1])
+# Define logistic embedding lookup (needed if we have two different batch sizes)
+# Add together element embeddings in window:
+log_embed = tf.zeros([logistic_batch_size, embedding_size])
+for element in range(max_words):
+    log_embed += tf.nn.embedding_lookup(embeddings, log_x_inputs[:, element])
+
+log_doc_indices = tf.slice(log_x_inputs, [0,max_words],[logistic_batch_size,1])
+log_doc_embed = tf.nn.embedding_lookup(doc_embeddings,log_doc_indices)
+
+# concatenate embeddings
+log_final_embed = tf.concat(axis=1, values=[log_embed, tf.squeeze(log_doc_embed)])
+
 A = tf.Variable(tf.random_normal(shape=[concatenated_size,1]))
 b = tf.Variable(tf.random_normal(shape=[1,1]))
 # Declare logistic model (sigmoid in loss function)
 model_output = tf.add(tf.matmul(log_final_embed, A), b)
 # Declare loss function (Cross Entropy loss)
-logistic_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(model_output, tf.cast(log_y_target, tf.float32)))
-# Add together element embeddings in window:
-log_embed = tf.zeros([logistic_batch_size, embedding_size])
-for element in range(max_words):
-    log_embed += tf.nn.embedding_lookup(embeddings, log_x_inputs[:, element])
-log_doc_indices = tf.slice(log_x_inputs, [0,max_words],[logistic_batch_size,1])
-log_doc_embed = tf.nn.embedding_lookup(doc_embeddings,log_doc_indices)
-# concatenate embeddings
-log_final_embed = tf.concat(1, [log_embed, tf.squeeze(log_doc_embed)])
+logistic_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=model_output, labels=tf.cast(log_y_target, tf.float32)))
+
 prediction = tf.round(tf.sigmoid(model_output))
 predictions_correct = tf.cast(tf.equal(prediction, tf.cast(log_y_target, tf.float32)), tf.float32)
 accuracy = tf.reduce_mean(predictions_correct)
