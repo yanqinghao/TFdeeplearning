@@ -184,9 +184,7 @@ num_refs = test_references_ix.shape[0]
 best_fit_refs = []
 for query in test_queries_ix:
     test_query = np.repeat(np.array([query]), num_refs, axis=0)
-    test_feed_dict = {address1_ph: test_query,address2_ph: test_references_ix,
-    y_target_ph: target_similarity,
-    dropout_keep_prob_ph: 1.0}
+    test_feed_dict = {address1_ph: test_query,address2_ph: test_references_ix, y_target_ph: target_similarity, dropout_keep_prob_ph: 1.0}
     test_out = sess.run(text_snn, feed_dict=test_feed_dict)
     best_fit = test_references[np.argmax(test_out)]
     best_fit_refs.append(best_fit)
